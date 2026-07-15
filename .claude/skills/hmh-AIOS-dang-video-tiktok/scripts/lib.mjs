@@ -237,18 +237,29 @@ export async function larkApi(CFG, method, apiPath, body) {
   throw new Error(`Lark ${apiPath}: hết lượt thử.`);
 }
 
-/** Tải attachment từ Lark về đĩa; trả về kích thước (bytes). */
+/** Tải attachment từ Lark về đĩa; trả về kích thước (bytes).
+ * Attachment nằm TRONG Bitable đòi tham số ?extra={"bitablePerm":{"tableId":...}} —
+ * thiếu nó Lark trả 400. Thử kèm extra trước (dùng tablePost), rớt về URL trần nếu vẫn cần. */
 export async function downloadAttachment(CFG, fileToken, destPath) {
   const token = await larkToken(CFG);
-  const r = await fetch(`${CFG.larkDomain}/open-apis/drive/v1/medias/${fileToken}/download`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!r.ok) throw new Error(`Tải video từ Lark lỗi ${r.status}`);
-  await new Promise((res, rej) => {
-    const ws = fs.createWriteStream(destPath);
-    Readable.fromWeb(r.body).pipe(ws); ws.on("finish", res); ws.on("error", rej);
-  });
-  return fs.statSync(destPath).size;
+  const base = `${CFG.larkDomain}/open-apis/drive/v1/medias/${fileToken}/download`;
+  const urls = [];
+  if (CFG.tablePost) {
+    const extra = encodeURIComponent(JSON.stringify({ bitablePerm: { tableId: CFG.tablePost } }));
+    urls.push(`${base}?extra=${extra}`);
+  }
+  urls.push(base);
+  let lastStatus = 0;
+  for (const url of urls) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok || (r.headers.get("content-type") || "").includes("application/json")) { lastStatus = r.status; continue; }
+    await new Promise((res, rej) => {
+      const ws = fs.createWriteStream(destPath);
+      Readable.fromWeb(r.body).pipe(ws); ws.on("finish", res); ws.on("error", rej);
+    });
+    return fs.statSync(destPath).size;
+  }
+  throw new Error(`Tải video từ Lark lỗi ${lastStatus || "?"}`);
 }
 
 export async function listAllRecords(CFG, tableId) {
